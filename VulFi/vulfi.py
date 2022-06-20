@@ -146,9 +146,11 @@ class VulFiScanner:
                     # Name of the function where the xref is located
                     found_in_name = utils.get_func_name(scanned_function_xref)
                     priority = ""
-                    # Every xref will be marked as High in case that params fetch fails
+                    # Every xref will be marked as Info in case that params fetch fails
                     try:
-                        if not param or eval(rule["mark_if"]["High"],dict(self=self, param=param,param_count=param_count,function_call=function_call)):
+                        if not param:
+                            priority = "Info"
+                        elif eval(rule["mark_if"]["High"],dict(self=self, param=param,param_count=param_count,function_call=function_call)):
                             priority = "High"
                         elif eval(rule["mark_if"]["Medium"],dict(self=self, param=param,param_count=param_count,function_call=function_call)):
                             priority = "Medium"
@@ -157,8 +159,8 @@ class VulFiScanner:
                         
                     except IndexError:
                         # Decompiler output has fewer parameters than the function prototype
-                        # Mark the issue with low priority
-                        priority = "Low"
+                        # Mark the issue with Info priority
+                        priority = "Info"
                         #results.append(list(VulFi.result_window_row(rule["name"],scanned_function_display_name,found_in_name,hex(scanned_function_xref),"Not Checked","Low","")))
                     except Exception:
                         print(traceback.format_exc())
@@ -600,13 +602,13 @@ class VulFiScanner:
                             else:
                                 return True
                         elif parent.op == ida_hexrays.cot_asg:
-                            # return value is assigned to the variable
+                            # return value is assigned to the variable/global
                             # Look through the rest of the function and find any if comparison with this variable and const number
-                            if parent.to_specific_type.x.v:
+                            if parent.to_specific_type.x.v or parent.to_specific_type.x.op == ida_hexrays.cot_obj:
                                 for sub_tree_item in list(decompiled_function.treeitems)[index:]:
                                     if sub_tree_item.to_specific_type.op >= 22 and sub_tree_item.to_specific_type.op <= 31:
                                         # Comparison operator
-                                        if sub_tree_item.to_specific_type.x.v and sub_tree_item.to_specific_type.x.v.idx == parent.to_specific_type.x.v.idx:
+                                        if (sub_tree_item.to_specific_type.x.v and sub_tree_item.to_specific_type.x.v.idx == parent.to_specific_type.x.v.idx) or (sub_tree_item.to_specific_type.x.obj_ea and sub_tree_item.to_specific_type.x.obj_ea == parent.to_specific_type.x.obj_ea):
                                             if check_val is not None:
                                                 numeric_val = sub_tree_item.to_specific_type.y
                                                 if numeric_val and (numeric_val.n or numeric_val.fpc): # Check if there is a Y operand and if it is a number, if it is, get its value
@@ -622,14 +624,25 @@ class VulFiScanner:
                                                         return False
                                             else:
                                                 return True
+                                        else:
+                                            # Look for embedded assigns in cit_if (look until cit_if or cit_block is found)
+                                            embedded_parent = decompiled_function.body.find_parent_of(sub_tree_item)
+                                            while True:
+                                                if embedded_parent.op == ida_hexrays.cit_if:
+                                                    return True
+                                                elif embedded_parent.op == ida_hexrays.cit_block:
+                                                    return False
+                                                else:
+                                                    embedded_parent = decompiled_function.body.find_parent_of(embedded_parent)
                                     elif sub_tree_item.op == ida_hexrays.cit_if or sub_tree_item.op == ida_hexrays.cot_lnot or sub_tree_item.op == ida_hexrays.cot_lor or sub_tree_item.op == ida_hexrays.cot_land:
                                         if check_val is not None:
-                                            if not parent.to_specific_type.cif.expr.y:
-                                                # There is no Y, likely checked against 0: if(func_call())
-                                                if check_val == 0:
-                                                    return True
-                                                else:
-                                                    return False
+                                            if not parent.is_expr():
+                                                if not parent.to_specific_type.cif.expr.y:
+                                                    # There is no Y, likely checked against 0: if(func_call())
+                                                    if check_val == 0:
+                                                        return True
+                                                    else:
+                                                        return False
                                         else:
                                             return True
 
