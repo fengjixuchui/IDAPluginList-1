@@ -789,7 +789,7 @@ class CallTreeOverviewer(cto_base.cto_base, ida_graph.GraphViewer):
             
             # if it has a subgraph or the parent graph, they need to be refreshed
             # and select the primary node. Otherwise, IDA will crash if a node
-            # is disappeard in a case such as disablling global nodes.
+            # is disappeared in a case such as disablling global nodes.
             if self.parent:
                     
                 self.parent.use_internal_function_cache = use_cache
@@ -2152,6 +2152,8 @@ class CallTreeOverviewer(cto_base.cto_base, ida_graph.GraphViewer):
         ESC_KEY = 0x1000000
         ENTER_KEY = 0x1000004
         RETURN_KEY = 0x1000005
+        F5_KEY = 0x1000034
+        TAB_KEY = 0x1000001
 
         if self.config.debug: self.dbg_print("pressed key: %d, state; %d" % (key, state))
         
@@ -2242,7 +2244,7 @@ class CallTreeOverviewer(cto_base.cto_base, ida_graph.GraphViewer):
             self.refresh_with_center_node()
             self.exec_ui_action("EmptyStack")
             ida_kernwin.msg("cOmments %sabled%s" % ("en" if self.config.show_comment_nodes else "dis", os.linesep))
-        # show unresolved Indrect calls
+        # show unresolved Indirect calls
         elif c == 'I' and state == 0:
             self.config.show_indirect_calls = not self.config.show_indirect_calls
             self.use_internal_function_cache = False
@@ -2307,6 +2309,15 @@ class CallTreeOverviewer(cto_base.cto_base, ida_graph.GraphViewer):
                 ida_kernwin.msg(hint)
             else:
                 ida_kernwin.msg("Select a node first.")
+        # launch decompiler
+        elif key == TAB_KEY and state == 0:
+            self.exec_ida_ui_action("hx:JumpPseudo")
+        # launch decompiler
+        elif key == F5_KEY and state == 0:
+            self.exec_ida_ui_action("hx:GenPseudo")
+        # toggle ida-view and text view
+        elif c == ' ' and state == 0:
+            self.exec_ida_ui_action("ToggleRenderer")
         # go to an address or an address of a function name
         elif c == 'G' and state == 0:
             self.exec_ida_ui_action("JumpAsk")
@@ -2339,7 +2350,7 @@ class CallTreeOverviewer(cto_base.cto_base, ida_graph.GraphViewer):
             self.check_and_add_cmt()
         # apply structure
         elif c == 'T' and state == 0:
-            self.check_and_apply_strunct()
+            self.check_and_apply_struct()
         # show xrefs to
         elif c == 'X' and state == 0:
             self.check_xrefs()
@@ -2471,6 +2482,7 @@ Shift+U: Update function relationships partially. It updates only the node on th
 Ctrl+U: Update all comment caches. This is useful for collecting some tools'a results such as
    ironstrings and findcrypt.py.
 N: reName a function (this option redirects to IDA View-A so that you can use it transparently).
+F5: decompile a function
 G: Go to a place (this option redirects to IDA View-A so that you can use it transparently).
 X: display Xrefs (this option redirects to IDA View-A so that you can use it transparently).
 T: apply a sTructure member to an operand (this option redirects to IDA View-A so that
@@ -4617,13 +4629,15 @@ _: print several important internal caches for debugging.
 
         if self.config.debug:
             self.dbg_print("############################## finished to build call tree process.")
-    
+
+    """
     def change_widget_icon(self, icon_data=None, bg_change=False, w=None):
         if icon_data is None:
             icon_data = self.icon.icon_data
         if w is None:
             w = self.GetWidget()
-        return self.icon.change_widget_icon(w, icon_data, bg_change)
+        return self.icon.change_widget_icon(w, icon_data, bg_change, title=self.title)
+    """
         
     def zoom_graph(self, w=None, zoom=1, x=None, y=None):
         if w is None:
