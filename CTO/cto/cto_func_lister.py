@@ -25,14 +25,12 @@ import syncui
 import qtutils
 import cto_utils
 import icon
-#import cto
 import get_func_relation
 ida_idaapi.require("cto_base")
 ida_idaapi.require("syncui")
 ida_idaapi.require("qtutils")
 ida_idaapi.require("cto_utils")
 ida_idaapi.require("icon")
-#ida_idaapi.require("cto")
 ida_idaapi.require("get_func_relation")
 
 if not hasattr(ida_kernwin, "WOPN_NOT_CLOSED_BY_ESC"):
@@ -62,7 +60,7 @@ class MyFilterProxyModel(QtCore.QSortFilterProxyModel):
         except AttributeError:
             #self.__index__ = self.___index__
             self.filterAcceptsRow = self._filterAcceptsRow
-            
+    
     # for observing renaming events
     def setData(self, index, value, role=QtCore.Qt.EditRole):
         oldvalue = index.data(role)
@@ -174,17 +172,24 @@ class MyWidget(QtWidgets.QTreeView):
         # generate source model
         self.model = QtGui.QStandardItemModel()
         #self.modeltest = ModelTest(self.model, self)
-        self.model.setHorizontalHeaderLabels(['Name','Address', 'CRefs', 'BBs'])
+        self.model.setHorizontalHeaderLabels(['Name','Address', 'XR', 'BB', 'FN', 'UFN', 'A/L', 'GV', 'STR'])
+        self.model.horizontalHeaderItem(2).setToolTip("Xrefs to count")
+        self.model.horizontalHeaderItem(3).setToolTip("Basic blocks count")
+        self.model.horizontalHeaderItem(4).setToolTip("Internal function pointers count")
+        self.model.horizontalHeaderItem(5).setToolTip("Unique internal function pointers count")
+        self.model.horizontalHeaderItem(6).setToolTip("APIs/Libs count")
+        self.model.horizontalHeaderItem(7).setToolTip("Global variables count")
+        self.model.horizontalHeaderItem(8).setToolTip("Strings count")
         
         # set proxy model for filter
-        if (self.qt_ver[0] >= 5 and self.qt_ver[1] >= 10) or self.qt_ver >= 6:
+        if (self.qt_ver[0] >= 5 and self.qt_ver[1] >= 10) or self.qt_ver[0] >= 6:
             self.proxy_model = QtCore.QSortFilterProxyModel()
             # the option is available only 5.10 and above
             self.proxy_model.setRecursiveFilteringEnabled(True)
         else:
             self.proxy_model = MyFilterProxyModel()
         # change the filter method according to the version
-        if (self.qt_ver[0] >= 5 and self.qt_ver[1] >= 12) or self.qt_ver >= 6:
+        if (self.qt_ver[0] >= 5 and self.qt_ver[1] >= 12) or self.qt_ver[0] >= 6:
             self.filterChanged = self._filterChanged_512
         else:
             self.filterChanged = self._filterChanged
@@ -195,7 +200,7 @@ class MyWidget(QtWidgets.QTreeView):
         # connect tree view with source item model through proxy model
         self.setModel(self.proxy_model)
         self.proxy_model.setSourceModel(self.model)
-        if self.qt_ver[0] == 5 and self.qt_ver[1] < 12:
+        if not((self.qt_ver[0] >= 5 and self.qt_ver[1] >= 10) or self.qt_ver[0] >= 6):
             self.proxy_model.itemDataChanged.connect(self.handleItemDataChanged)
         
         # set selection model for synchronizing with ida
@@ -373,11 +378,10 @@ class MyWidget(QtWidgets.QTreeView):
                 #self.dbg_print(idx.model())
                 if idx.model() == self.proxy_model:
                     idx = self.proxy_model.mapToSource(idx)
-            #if idx is not None and idx.isValid(): self.dbg_print(idx.model())
             if idx is not None and idx.isValid():
                 # send the single to the parent widget
                 self.item_changed.emit(idx, old_val, new_val)
-            
+    
     def eventFilter(self, src, event):
         flag = False
         if event.type() == QtCore.QEvent.KeyPress:
@@ -530,6 +534,7 @@ class cto_func_lister_t(cto_base.cto_base, ida_kernwin.PluginForm):
         ida_kernwin.PluginForm.__init__(self)
         cto_base.cto_base.__init__(self, cto_data, curr_view, debug)
         
+        self.qt_ver = qtutils.get_qver()
 	
         # Create tree control
         self.tree = MyWidget()
@@ -729,6 +734,8 @@ class cto_func_lister_t(cto_base.cto_base, ida_kernwin.PluginForm):
         if f:
             ea = f.start_ea
         self.copy_cache_data()
+        # before modifiing the tree, disconnect dataChanged hook
+        self.model.dataChanged.disconnect(self.on_data_changed)
         if ea == ida_idaapi.BADADDR:
             self.clear_tree()
             self.PopulateTree()
@@ -740,6 +747,8 @@ class cto_func_lister_t(cto_base.cto_base, ida_kernwin.PluginForm):
             # for general functions
             self.update_callee_function(orig_ea)
             self.update_function(ea)
+        # after modifiing the tree, reconnect dataChanged hook again
+        self.model.dataChanged.connect(self.on_data_changed)
             
         # restore filter text
         if filter_text:
@@ -930,6 +939,8 @@ class cto_func_lister_t(cto_base.cto_base, ida_kernwin.PluginForm):
         return use_opn
     
     def jump_to_idx(self, idx):
+        # before jumping get the first column idx, which has ea.
+        idx = idx.sibling(idx.row(), 0)
         use_opn = self.does_use_opn(idx)
         ea, name, mod_name, ea_type = self.get_ea_by_idx(idx)
         if ea != ida_idaapi.BADADDR:
@@ -1062,9 +1073,20 @@ class cto_func_lister_t(cto_base.cto_base, ida_kernwin.PluginForm):
                     item.setBackground(self.selected_bg)
                 self.tree.setFocus()
                 self.sel_model.select(curr, QtCore.QItemSelectionModel.Select|QtCore.QItemSelectionModel.Rows)
-
+                
+    # On Qt 5.6.3, this does not work since roles are always empty while it works on 5.15.3.
+    def on_data_changed(self, topleft, rightobttom, roles):
+        if QtCore.Qt.EditRole in roles:
+            ea, old_val, _mod_name, _ = self.get_ea_by_idx(topleft)
+            new_val = topleft.data(QtCore.Qt.EditRole)
+            if not old_val:
+                old_val = ida_name.get_name(ea)
+            
+            self.on_item_changed(topleft, old_val, new_val)
+        
     def on_item_changed(self, idx, old_val, new_val):
         ea, _name, _mod_name, _ = self.get_ea_by_idx(idx)
+        refreshed = False
         if ea != ida_idaapi.BADADDR and old_val != new_val:
             r = ida_name.set_name(ea, new_val, ida_name.SN_NOCHECK|ida_name.SN_NOWARN)
             if not r:
@@ -1085,9 +1107,18 @@ class cto_func_lister_t(cto_base.cto_base, ida_kernwin.PluginForm):
                         item.setText(name)
                         # refresh other cto instanses
                         self.refresh_all(ea)
+                        refreshed = True
                 else:
                     # refresh other cto instances
                     self.refresh_all(ea)
+                    refreshed = True
+                    
+        if refreshed:
+            # for IDA history (back)
+            w, wt = self.get_widget()
+            self.exec_ui_action("Return", w=w)
+            self.expand_item_by_ea(ida_kernwin.get_screen_ea())
+            self.tree.setFocus()
             
     def buildContextMenu(self, event):
         cmenu = QtWidgets.QMenu(self.tree)
@@ -1215,6 +1246,12 @@ class cto_func_lister_t(cto_base.cto_base, ida_kernwin.PluginForm):
         # rename a function
         elif c == 'N' and state == 0:
             flag = self.check_and_rename_var()
+            if flag:
+                # for IDA history (back)
+                w, wt = self.get_widget()
+                self.exec_ui_action("Return", w=w)
+                self.expand_item_by_ea(ida_kernwin.get_screen_ea())
+                self.tree.setFocus()
         elif c == 'P' and state == ALT:
             self.check_and_rename_func_info()
         # repeatable comment
@@ -1350,12 +1387,13 @@ D: enable/disable Debug mode
         
         # adjust header length manually
         #self.tree.header().setCascadingSectionResizes(True)
+        self.tree.header().setMinimumSectionSize(10)
         self.tree.header().setSectionResizeMode(0, self.tree.header().Interactive)
-        self.tree.header().setSectionResizeMode(1, self.tree.header().Interactive)
+        #self.tree.header().setSectionResizeMode(1, self.tree.header().Interactive)
         self.tree.header().setStretchLastSection(False)
         self.tree.header().resizeSection(0, 180)
-        for i in range(2,4):
-            self.tree.resizeColumnToContents(i)
+        #for i in range(1,8):
+        #    self.tree.resizeColumnToContents(i)
         
         # =============================
         # for actions like when clicking, right-clicking or for events when changing selected items
@@ -1363,7 +1401,9 @@ D: enable/disable Debug mode
         self.tree.current_changed.connect(self.on_curr_item_changed)
         
         # for hooking renaming events
-        self.tree.item_changed.connect(self.on_item_changed)
+        if not((self.qt_ver[0] >= 5 and self.qt_ver[1] >= 10) or self.qt_ver[0] >= 6):
+            self.tree.item_changed.connect(self.on_item_changed)
+        self.model.dataChanged.connect(self.on_data_changed)
         
         # shortcut keys for passing to IDA
         self.tree.key_pressed.connect(self.on_key_pressed)
@@ -1531,20 +1571,45 @@ D: enable/disable Debug mode
         else:
             func_name = ida_name.get_name(func_ea)
         return func_name
+
+    def count_func_type(self, func_ea, func_types, uniq=False):
+        r = [d for k,(d,ft,_,_) in self.func_relations[func_ea]['children'].items() if ft in func_types]
+        if uniq:
+            r = set(r)
+        return len(r)
     
     def RegisterFuncToTree(self, parent, func_ea, func_name, ea_dict, idx_dict, other_data=None, row=-1):
         ifunc_name = QtGui.QStandardItem("%s" % (func_name))
-        ifunc_addr = QtGui.QStandardItem("%x" % (func_ea))
-        ifunc_xref_cnt = QtGui.QStandardItem("%d" % (cto_utils.count_xref(func_ea)))
-        ifunc_bb_cnt = QtGui.QStandardItem("%d" % (cto_utils.count_bbs(func_ea)))
+        ifunc_addr = QtGui.QStandardItem()
+        ifunc_addr.setData(func_ea, QtCore.Qt.DisplayRole)
+        ifunc_addr.setText("%x" % (func_ea))
+        ifunc_xref_cnt = QtGui.QStandardItem()
+        ifunc_xref_cnt.setData(cto_utils.count_xref(func_ea), QtCore.Qt.DisplayRole)
+        ifunc_bb_cnt = QtGui.QStandardItem()
+        ifunc_bb_cnt.setData(cto_utils.count_bbs(func_ea), QtCore.Qt.DisplayRole)
+        ifunc_internal_funcs_cnt = QtGui.QStandardItem()
+        ifunc_internal_funcs_cnt.setData(self.count_func_type(func_ea, [FT_GEN]), QtCore.Qt.DisplayRole)
+        ifunc_uniq_internal_funcs_cnt = QtGui.QStandardItem()
+        ifunc_uniq_internal_funcs_cnt.setData(self.count_func_type(func_ea, [FT_GEN], True), QtCore.Qt.DisplayRole)
+        ifunc_api_lib_cnt = QtGui.QStandardItem()
+        ifunc_api_lib_cnt.setData(self.count_func_type(func_ea, [FT_API, FT_LIB]), QtCore.Qt.DisplayRole)
+        ifunc_gvar_cnt = QtGui.QStandardItem()
+        ifunc_gvar_cnt.setData(self.count_func_type(func_ea, [FT_VAR]), QtCore.Qt.DisplayRole)
+        ifunc_str_cnt = QtGui.QStandardItem()
+        ifunc_str_cnt.setData(self.count_func_type(func_ea, [FT_STR]), QtCore.Qt.DisplayRole)
         ifunc_name.setToolTip(func_name)
         ifunc_addr.setEditable(False)
         ifunc_xref_cnt.setEditable(False)
         ifunc_bb_cnt.setEditable(False)
+        ifunc_internal_funcs_cnt.setEditable(False)
+        ifunc_uniq_internal_funcs_cnt.setEditable(False)
+        ifunc_api_lib_cnt.setEditable(False)
+        ifunc_gvar_cnt.setEditable(False)
+        ifunc_str_cnt.setEditable(False)
         if row >= 0:
-            parent.insertRow(row, (ifunc_name, ifunc_addr, ifunc_xref_cnt, ifunc_bb_cnt))
+            parent.insertRow(row, (ifunc_name, ifunc_addr, ifunc_xref_cnt, ifunc_bb_cnt, ifunc_internal_funcs_cnt, ifunc_uniq_internal_funcs_cnt, ifunc_api_lib_cnt, ifunc_gvar_cnt, ifunc_str_cnt))
         else:
-            parent.appendRow((ifunc_name, ifunc_addr, ifunc_xref_cnt, ifunc_bb_cnt))
+            parent.appendRow((ifunc_name, ifunc_addr, ifunc_xref_cnt, ifunc_bb_cnt, ifunc_internal_funcs_cnt, ifunc_uniq_internal_funcs_cnt, ifunc_api_lib_cnt, ifunc_gvar_cnt, ifunc_str_cnt))
         
         idx = self.model.indexFromItem(ifunc_name)
         idx_addr = self.model.indexFromItem(ifunc_addr)
@@ -1614,17 +1679,35 @@ D: enable/disable Debug mode
     def show(self):
         # show the list
         r = self.Show()
-
+        
+        # dock it next to the function window
         if r:
             # use the option not to close by pressing ESC key
             ida_kernwin.display_widget(self.GetWidget(), ida_kernwin.WOPN_NOT_CLOSED_BY_ESC, None)
             
             ida_kernwin.set_dock_pos(self.title, "Functions window", ida_kernwin.DP_TAB)
             
+        # change the icon and colors
         self.change_widget_icon(bg_change=self.config.dark_mode)
         if self.config.dark_mode:
             self.tree.reset_btn_size()
             
+        # change the columns size
+        # This does not work after displaying the widget.
+        # That's why I inserted this here.
+        for i in range(1,9):
+            self.tree.resizeColumnToContents(i)
+            
+        # move to the current screen ea location
+        # Moving to the screen ea only works well after displaying the widgets.
+        # That is why this is inserted here.
+        ea = ida_kernwin.get_screen_ea()
+        if ea != ida_idaapi.BADADDR:
+            self.expand_item_by_ea(ea)
+            
+        # focus the tree widget
+        self.tree.setFocus()
+        
         return r
 
 # --------------------------------------------------------------------------
